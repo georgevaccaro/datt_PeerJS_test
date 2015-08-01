@@ -13,9 +13,10 @@
 
 <div id="poster">
 <b>Post all the things</b>
-<p>Title <input type="text" id="datt_title"></p>
+<p>Title* <input type="text" id="datt_title"></p>
 <p>Value <input type="text" id="datt_value"></p>
 <p>Where <input type="text" id="datt_where"></p>
+<p>File <input type="file" id="datt_file"></p>
 <input type="button" value="Send" onclick="sendDattMsg()">
 </div>
 
@@ -26,13 +27,15 @@
   <div class="entry">
     <h1><a href="{{value}}">{{title}}</a></h1>
     <small>{{id}}</small><br>
-    Sent by {{user}}{{#if where}} to {{where}}{{/if}}.{{#if from}} Received via {{from}}.{{/if}}
+    Sent by {{user}}{{#if where}} to {{where}}{{/if}}.{{#if from}} Received via {{from}}.{{/if}}{{#if torrent}} Torrent {{torrent}}.{{/if}}
   </div>
 </script>
 
 <script src="https://code.jquery.com/jquery-2.1.4.min.js"></script>
 <script src="./handlebars-v3.0.3.js"></script>
 <script src="./peer.min.js"></script>
+<script src="./bower_components/bitcore/bitcore.min.js"></script>
+<script src="./bower_components/webtorrent/webtorrent.min.js"></script>
 <script>
 var peer
 var userId
@@ -40,9 +43,26 @@ var subs = {}
 var subscribers = []
 var dattTemplate = Handlebars.compile($("#dattEntry").html())
 var cryptoObj = window.crypto || window.msCrypto
+var WebTorrent = require('webtorrent')
+var wtClient
 
 function handleDattPost(data) {
     var msg = JSON.parse(data)
+        
+    if (msg.torrent) {
+        if (!wtClient) {
+            wtClient = new WebTorrent()
+        }
+        
+        wtClient.add(msg.torrent, function (torrent) {
+            // Got torrent metadata!
+            console.log('Client is downloading:', torrent.infoHash)
+
+            torrent.files.forEach(function (file) {
+                file.appendTo('body')
+            })
+        })
+    }
         
     $("#dattContent").append(dattTemplate(msg))
     
@@ -83,13 +103,14 @@ function connect() {
         conn.on('data', function(data) {
             console.log('Forwarding subscriber post')
             var msg = handleDattPost(data)
-            msg.from = this.peer
+            /*msg.from = this.peer
             
+            var msgTxt = JSON.stringify(msg)
             for (var i=0; i < subscribers.length; i++) {
                 if (subscribers[i].peer != this.peer) {
                     subscribers[i].send(msgTxt)
                 }
-            }
+            }*/
         })
     })
     
@@ -110,6 +131,7 @@ function sendDattMsg() {
     var title = $("#datt_title").val()
     var value = $("#datt_value").val()
     var where = $("#datt_where").val()
+    var files = $("#datt_file")[0].files
     var msg = {
         'id': newPostID(),
         'title': title,
@@ -119,23 +141,40 @@ function sendDattMsg() {
         'pow': 0
     }
     
-    var msgTxt = JSON.stringify(msg)
-    
-    if (where.length == 0) {
-        // Doing a self post
-        for (var i=0; i < subscribers.length; i++) {
-            subscribers[i].send(msgTxt)
-        }
-    } else {
-        var spsubs = where.split(' ')
+    var finishSending = function() {
+        var msgTxt = JSON.stringify(msg)
         
-        for (var i=0; i < spsubs.length; i++) {
-            if (spsubs[i] in subs) {
-                subs[spsubs[i]].send(msgTxt)
-            } else {
-                // Unknown or unsubscribed sub, search it
+        if (where.length == 0) {
+            // Doing a self post
+            for (var i=0; i < subscribers.length; i++) {
+                subscribers[i].send(msgTxt)
+            }
+        } else {
+            var spsubs = where.split(' ')
+            
+            for (var i=0; i < spsubs.length; i++) {
+                if (spsubs[i] in subs) {
+                    subs[spsubs[i]].send(msgTxt)
+                } else {
+                    // Unknown or unsubscribed sub, search it
+                }
             }
         }
+    }
+    
+    if (files.length > 0) {
+        if (!wtClient) {
+            wtClient = new WebTorrent()
+        }
+        
+        var torr = wtClient.seed(files, function onTorrent (torrent) {
+            console.log('Client is seeding:', torrent.infoHash)
+            msg.torrent = torrent.infoHash
+            
+            finishSending()
+        })
+    } else {
+        finishSending()
     }
 }
 

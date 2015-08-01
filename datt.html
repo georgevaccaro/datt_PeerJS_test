@@ -1,0 +1,160 @@
+<html>
+<head>
+<title>DATT Prototype</title>
+</head>
+<body>
+<div id="dattlogin">Username <input type="text" id="user"><input type="button" value="Start" onclick="connect()"></div>
+
+<div id="subscriber">
+<b>Subscribe to all the things</b>
+<p>Tag <input type="text" id="datt_sub"></p>
+<input type="button" value="Subscribe" onclick="subscribeDattTag()">
+</div>
+
+<div id="poster">
+<b>Post all the things</b>
+<p>Title <input type="text" id="datt_title"></p>
+<p>Value <input type="text" id="datt_value"></p>
+<p>Where <input type="text" id="datt_where"></p>
+<input type="button" value="Send" onclick="sendDattMsg()">
+</div>
+
+<div id="dattContent">
+</div>
+
+<script id="dattEntry" type="text/x-handlebars-template">
+  <div class="entry">
+    <h1><a href="{{value}}">{{title}}</a></h1>
+    <small>{{id}}</small><br>
+    Sent by {{user}}{{#if where}} to {{where}}{{/if}}.{{#if from}} Received via {{from}}.{{/if}}
+  </div>
+</script>
+
+<script src="https://code.jquery.com/jquery-2.1.4.min.js"></script>
+<script src="./handlebars-v3.0.3.js"></script>
+<script src="./peer.min.js"></script>
+<script>
+var peer
+var userId
+var subs = {}
+var subscribers = []
+var dattTemplate = Handlebars.compile($("#dattEntry").html())
+var cryptoObj = window.crypto || window.msCrypto
+
+function handleDattPost(data) {
+    var msg = JSON.parse(data)
+        
+    $("#dattContent").append(dattTemplate(msg))
+    
+    msg.from = userId
+    var msgTxt = JSON.stringify(msg)
+    // Redistribute posts to subscribers
+    for (var i=0; i < subscribers.length; i++) {
+        subscribers[i].send(msgTxt)
+    }
+    
+    return msg
+}
+
+function newPostID() {
+    var scratchBuf = new Int8Array(32)
+    cryptoObj.getRandomValues(scratchBuf)
+    
+    return btoa(scratchBuf)
+}
+
+function connect() {
+    var id = 'u_' + $("#user").val()
+    userId = id
+    
+    peer = new Peer(id, {key: 'zmwyczboi1ux47vi'})
+    var peerID
+
+    peer.on('open', function(id) {
+        console.log('My peer ID is: ' + id)
+        peerID = id
+        $("#dattlogin").fadeOut()
+    })
+    
+    peer.on('connection', function(conn) {
+        subscribers.push(conn)
+        console.log("New user", conn)
+        
+        conn.on('data', function(data) {
+            console.log('Forwarding subscriber post')
+            var msg = handleDattPost(data)
+            msg.from = this.peer
+            
+            for (var i=0; i < subscribers.length; i++) {
+                if (subscribers[i].peer != this.peer) {
+                    subscribers[i].send(msgTxt)
+                }
+            }
+        })
+    })
+    
+    peer.on('data', function(data) {
+        console.log('Received', data)
+        var msg = handleDattPost(data)
+        /*msg.from = this.peer
+        
+        for (var i=0; i < subscribers.length; i++) {
+            if (subscribers[i].peer != this.peer) {
+                subscribers[i].send(msgTxt)
+            }
+        }*/
+    })
+}
+
+function sendDattMsg() {
+    var title = $("#datt_title").val()
+    var value = $("#datt_value").val()
+    var where = $("#datt_where").val()
+    var msg = {
+        'id': newPostID(),
+        'title': title,
+        'value': value,
+        'user': userId,
+        'where': where,
+        'pow': 0
+    }
+    
+    var msgTxt = JSON.stringify(msg)
+    
+    if (where.length == 0) {
+        // Doing a self post
+        for (var i=0; i < subscribers.length; i++) {
+            subscribers[i].send(msgTxt)
+        }
+    } else {
+        var spsubs = where.split(' ')
+        
+        for (var i=0; i < spsubs.length; i++) {
+            if (spsubs[i] in subs) {
+                subs[spsubs[i]].send(msgTxt)
+            } else {
+                // Unknown or unsubscribed sub, search it
+            }
+        }
+    }
+}
+
+function subscribeDattTag() {
+    var id = $("#datt_sub").val()
+    
+    var conn = peer.connect(id)
+    conn._sub_id_ = id
+    subs[id] = conn
+    
+    conn.on('open', function() {
+        // Receive messages
+        conn.on('data', function(data) {
+            console.log('Received from ' + this._sub_id_ + ': ', data)
+            
+            handleDattPost(data)
+        })
+    })
+}
+</script>
+</body>
+</html>
